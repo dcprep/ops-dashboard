@@ -122,6 +122,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 .dot{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700}
 .dot-ok{background:var(--teal);color:#fff}.dot-slow{background:var(--amber);color:#fff}
 .dot-none{background:var(--red-lt);color:var(--red)}.dot-future{background:var(--lt);color:var(--muted)}
+.dot-due{background:var(--lt);color:var(--amber);box-shadow:inset 0 0 0 1.5px var(--amber);font-size:8px}
 .last-drill-card{background:var(--lt);border-radius:10px;padding:12px 14px;margin-bottom:10px}
 .stat-line{display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:0.5px solid var(--border)}
 .stat-line:last-child{border-bottom:none}
@@ -715,6 +716,54 @@ function renderDrills() {
     }).join('');
   }
 
+  // Lockdown drills are required once per academic quarter, not monthly.
+  // Quarter end dates (month, day) — update each school year if they change.
+  // Feb, Apr, and Jun are split between two quarters; a drill in a split month
+  // can count toward either quarter (earlier quarter gets first claim).
+  const LOCK_QUARTERS = [
+    { months: [8, 9, 10],     end: [10, 30] },
+    { months: [11, 12, 1, 2], end: [2, 8]   },
+    { months: [2, 3, 4],      end: [4, 12]  },
+    { months: [4, 5, 6],      end: [6, 15]  },
+  ];
+  const yrOf = num => num >= 8 ? syStart : syStart + 1;
+
+  function lockDots(statuses) {
+    const idxOf = num => months.findIndex(m => m.num === num);
+    const hasDrill = num => { const s = statuses?.[idxOf(num)]; return s === 'ok' || s === 'slow'; };
+    const used = new Set();
+
+    const qState = LOCK_QUARTERS.map((q, qi) => {
+      const prev = LOCK_QUARTERS[qi - 1]?.months || [];
+      const next = LOCK_QUARTERS[qi + 1]?.months || [];
+      const order = [
+        ...q.months.filter(n => !prev.includes(n) && !next.includes(n)),
+        ...q.months.filter(n => prev.includes(n)),
+        ...q.months.filter(n => next.includes(n)),
+      ];
+      const pick = order.find(n => hasDrill(n) && !used.has(n));
+      if (pick !== undefined) used.add(pick);
+      const endDate = new Date(yrOf(q.end[0]), q.end[0] - 1, q.end[1], 23, 59, 59);
+      return { done: pick !== undefined, ended: today > endDate };
+    });
+
+    return months.map((m, mi) => {
+      const yr = yrOf(m.num);
+      const past = new Date(yr, m.num - 1, 1) < today;
+      const isCurrent = yr === today.getFullYear() && m.num - 1 === today.getMonth();
+      const st = statuses?.[mi] || 'none';
+      let cls = 'dot-future', sym = '';
+      if (past && (st === 'ok' || st === 'slow')) {
+        cls = st === 'ok' ? 'dot-ok' : 'dot-slow'; sym = '✓';
+      } else if (past) {
+        const qs = qState.filter((_, qi) => LOCK_QUARTERS[qi].months.includes(m.num));
+        if (qs.some(q => q.ended && !q.done))               { cls = 'dot-none'; sym = '!'; }
+        else if (isCurrent && qs.some(q => !q.ended && !q.done)) { cls = 'dot-due'; sym = 'due'; }
+      }
+      return `<div class="month-cell"><div class="month-lbl">${m.label}</div><div class="dot ${cls}">${sym}</div></div>`;
+    }).join('');
+  }
+
   const CAMPUSES = ['AEC','AMC','BEC','BMC','EEC','EMC'];
   let html = '';
 
@@ -733,7 +782,7 @@ function renderDrills() {
     // Lockdown — own card
     html += `<div class="section" style="margin-bottom:10px">
       <div class="drill-type-label">Lockdown</div>
-      <div class="month-row">${dots(comp?.lock)}</div>
+      <div class="month-row">${lockDots(comp?.lock)}</div>
     </div>`;
 
     // Most recent — label outside, each drill in its own white card
