@@ -128,6 +128,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 .stat-line:last-child{border-bottom:none}
 .stat-key{color:var(--muted)}.stat-val{color:var(--navy);font-weight:500;max-width:60%;text-align:right}
 .stat-val.ok{color:var(--teal)}.stat-val.warn{color:var(--amber)}.stat-val.flag{color:var(--red)}
+.drill-sub{font-size:9px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);margin:16px 0 10px}
+.drill-block-lbl{font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin:14px 0 4px}
+.drill-notes{font-size:12px;color:var(--text);line-height:1.5;white-space:pre-wrap;padding:4px 0}
+.drill-observer{background:var(--lt);border-radius:8px;padding:10px 12px;margin-top:6px;font-size:12px;line-height:1.5}
+.drill-observer-hd{font-weight:600;color:var(--navy);margin-bottom:2px}
+details.prev-drill{background:var(--card);border:0.5px solid var(--border);border-radius:12px;margin-bottom:8px}
+details.prev-drill>summary{list-style:none;cursor:pointer;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13px;color:var(--navy);font-weight:600}
+details.prev-drill>summary::-webkit-details-marker{display:none}
+details.prev-drill>summary .pd-type{font-size:11px;font-weight:500;color:var(--muted)}
+details.prev-drill>summary::after{content:'+';font-size:16px;color:var(--muted);font-weight:400}
+details.prev-drill[open]>summary::after{content:'–'}
+details.prev-drill .pd-body{padding:0 16px 14px}
 
 /* ── ARRIVAL ── */
 .session-hdr{font-size:11px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;margin:0 0 10px}
@@ -669,8 +681,9 @@ function buildSubtitles() {
   document.getElementById('sub-commonspace').textContent = csPct !== null && csPct !== undefined ? csPct + '% spaces well kept this period' : 'No walkthroughs logged';
 
   // Drills
-  const lastDrillDates = (OPS.drills?.lastDrills || []).flatMap(d => [d.evac?.date, d.lock?.date]).filter(Boolean);
-  document.getElementById('sub-drills').textContent = lastDrillDates.length ? 'Last drill: ' + lastDrillDates[0] : 'No drills logged yet';
+  const latestDrill = (OPS.drills?.groups || []).flatMap(g => [g.lastEvac, g.lastLock]).filter(Boolean)
+    .sort((a, b) => b.ts - a.ts)[0];
+  document.getElementById('sub-drills').textContent = latestDrill ? 'Last drill: ' + latestDrill.date : 'No drills logged yet';
 
   // Transport
   if (TRANSPORT?.routes?.length) {
@@ -710,8 +723,8 @@ function renderDrills() {
       const yr = m.num >= 8 ? syStart : syStart + 1;
       const past = new Date(yr, m.num - 1, 1) < today;
       const st = statuses?.[mi] || 'none';
-      const cls = !past ? 'dot-future' : st === 'ok' ? 'dot-ok' : st === 'slow' ? 'dot-slow' : 'dot-none';
-      const sym = !past ? '' : (st === 'ok' || st === 'slow') ? '✓' : '!';
+      const cls = !past ? 'dot-future' : st === 'ok' ? 'dot-ok' : 'dot-none';
+      const sym = !past ? '' : st === 'ok' ? '✓' : '!';
       return `<div class="month-cell"><div class="month-lbl">${m.label}</div><div class="dot ${cls}">${sym}</div></div>`;
     }).join('');
   }
@@ -764,49 +777,90 @@ function renderDrills() {
     }).join('');
   }
 
-  const CAMPUSES = ['AEC','AMC','BEC','BMC','EEC','EMC'];
+  const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const line = (k, v, cls='') => `<div class="stat-line"><span class="stat-key">${k}</span><span class="stat-val ${cls}">${v}</span></div>`;
+  const orDash = v => v ? esc(v) : '—';
+
+  // One drill's details. The first block follows the DC FEMS School Fire
+  // Drill Record, in the form's order, so it can be copied straight across.
+  function drillDetail(d) {
+    const occ = d.occupants.length > 1
+      ? d.occupants.map(o => `${esc(o.campus)}: ${o.count ? esc(o.count) : '—'}`).join(' · ')
+      : orDash(d.occupants[0]?.count);
+    const dateTime = esc(d.dateLong) + (d.alarmStart ? ' · ' + esc(d.alarmStart) : '');
+    let h = `<div class="drill-block-lbl">Fire marshal form</div>`;
+    h += line('School', esc(d.schools.join(' + ')));
+    h += line('Date / time', dateTime);
+    h += line('Weather', orDash(d.weather));
+    h += line('Total occupants', occ);
+    h += line('Completion time', d.durationSecs ? `${esc(d.duration)}${d.under10 ? ' ✓' : ' — over goal'}` : '—',
+              d.durationSecs ? (d.under10 ? 'ok' : 'warn') : '');
+    h += `<div class="stat-line" style="flex-direction:column;gap:2px"><span class="stat-key">Notes / problems</span>
+          <span class="drill-notes">${d.notes ? esc(d.notes) : '<span style="color:var(--muted)">None recorded</span>'}</span></div>`;
+
+    h += `<div class="drill-block-lbl">Times</div>`;
+    h += line('Alarm / start', orDash(d.alarmStart));
+    if (d.type.toLowerCase() === 'evacuation') h += line('Exit', orDash(d.exitTime));
+    h += line('All clear', orDash(d.allClearTime));
+    h += line('End / re-entry', orDash(d.endTime));
+
+    h += `<div class="drill-block-lbl">Observations</div>`;
+    d.observations.forEach(o => {
+      const v = (o.value || '').toLowerCase();
+      h += line(esc(o.item), v === 'yes' ? 'Yes' : v === 'no' ? 'No' : '—');
+    });
+    h += line('Improvement opportunities',
+      d.flags.length ? `<span style="display:flex;flex-direction:column;gap:3px">${d.flags.map(f => `<span>${esc(f)}</span>`).join('')}</span>` : 'None flagged',
+      d.flags.length ? 'flag' : 'ok');
+
+    if (d.observers.length) {
+      h += `<div class="drill-block-lbl">Observers</div>`;
+      d.observers.forEach(o => {
+        h += `<div class="drill-observer"><div class="drill-observer-hd">${esc(o.role)}${o.assessment ? ' · ' + esc(o.assessment) : ''}</div>
+              <div class="drill-notes" style="padding:0">${o.notes ? esc(o.notes) : '<span style="color:var(--muted)">No notes</span>'}</div></div>`;
+      });
+    }
+    return h;
+  }
+
+  const groups = OPS.drills?.groups || [];
   let html = '';
 
-  CAMPUSES.forEach((campus, ci) => {
-    const comp = (OPS.drills?.compliance || []).find(d => d.campus === campus);
-    const last = (OPS.drills?.lastDrills  || []).find(d => d.campus === campus);
+  groups.forEach((g, gi) => {
+    html += `<div style="font-size:18px;font-weight:700;color:var(--navy);margin:${gi===0?'4px':' 40px'} 0 14px">${esc(g.label)}</div>`;
 
-    html += `<div style="font-size:18px;font-weight:700;color:var(--navy);margin:${ci===0?'4px':' 40px'} 0 14px">${campus}</div>`;
-
-    // Evacuation — own card
+    // 1. Month view
     html += `<div class="section" style="margin-bottom:10px">
       <div class="drill-type-label">Evacuation</div>
-      <div class="month-row">${dots(comp?.evac)}</div>
+      <div class="month-row">${dots(g.evac)}</div>
     </div>`;
-
-    // Lockdown — own card
     html += `<div class="section" style="margin-bottom:10px">
       <div class="drill-type-label">Lockdown</div>
-      <div class="month-row">${lockDots(comp?.lock)}</div>
+      <div class="month-row">${lockDots(g.lock)}</div>
     </div>`;
 
-    // Most recent — label outside, each drill in its own white card
-    html += `<div style="font-size:9px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);margin:16px 0 10px">Most recent drills</div>`;
-    ['evac','lock'].forEach(type => {
-      const drill = last?.[type];
-      const label = type === 'evac' ? 'Evacuation' : 'Lockdown';
+    // 2. Most recent drill of each type, full detail
+    html += `<div class="drill-sub">Most recent drills</div>`;
+    [['lastEvac','Evacuation'], ['lastLock','Lockdown']].forEach(([k, label]) => {
+      const d = g[k];
       html += `<div class="section" style="margin-bottom:10px">`;
-      html += `<div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:10px">${label}</div>`;
-      if (!drill) {
-        html += `<div class="no-data">No drill logged yet</div>`;
-      } else {
-        const dc = drill.under10 ? 'ok' : 'warn';
-        const flagLines = drill.flags ? drill.flags.split(';').map(f=>f.trim()).filter(Boolean) : [];
-        html += `<div class="stat-line"><span class="stat-key">Date</span><span class="stat-val">${drill.date}</span></div>`;
-        html += `<div class="stat-line"><span class="stat-key">Duration</span><span class="stat-val ${dc}">${drill.duration}${drill.under10?' ✓':' — over goal'}</span></div>`;
-        if (flagLines.length) {
-          html += `<div class="stat-line" style="align-items:flex-start"><span class="stat-key">Improvement opportunities</span><span class="stat-val flag" style="display:flex;flex-direction:column;gap:3px">${flagLines.map(f=>`<span>${f}</span>`).join('')}</span></div>`;
-        } else {
-          html += `<div class="stat-line"><span class="stat-key">Improvement opportunities</span><span class="stat-val ok">None flagged</span></div>`;
-        }
-      }
+      html += `<div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px">${label}${d ? ' · ' + esc(d.date) : ''}</div>`;
+      html += d ? drillDetail(d) : `<div class="no-data">No drill logged yet this school year</div>`;
       html += `</div>`;
     });
+
+    // 3. Every other drill this school year, collapsed
+    const isLast = d => [g.lastEvac, g.lastLock].some(l => l && l.ts === d.ts && l.type === d.type);
+    const prev = g.drills.filter(d => !isLast(d));
+    html += `<div class="drill-sub">Previous drills this school year (${prev.length})</div>`;
+    if (!prev.length) {
+      html += `<div class="no-data">None yet</div>`;
+    } else {
+      prev.forEach(d => {
+        html += `<details class="prev-drill"><summary><span>${esc(d.date)} <span class="pd-type">· ${esc(d.type)}</span></span></summary>
+          <div class="pd-body">${drillDetail(d)}</div></details>`;
+      });
+    }
   });
 
   con.innerHTML = html;
